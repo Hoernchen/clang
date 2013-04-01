@@ -37,6 +37,7 @@
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Support/ConvertUTF.h"
 #include "llvm/Support/raw_ostream.h"
+#include "llvm/Value.h"
 #include <limits>
 using namespace clang;
 using namespace sema;
@@ -156,6 +157,10 @@ Sema::CheckBuiltinFunctionCall(unsigned BuiltinID, CallExpr *TheCall) {
     // SemaBuiltinShuffleVector guts it, but then doesn't release it.
   case Builtin::BI__builtin_prefetch:
     if (SemaBuiltinPrefetch(TheCall))
+      return ExprError();
+    break;
+  case Builtin::BI__builtin_assume_aligned:
+    if (SemaBuiltinAssumeAligned(TheCall))
       return ExprError();
     break;
   case Builtin::BI__builtin_object_size:
@@ -1583,6 +1588,52 @@ bool Sema::SemaBuiltinPrefetch(CallExpr *TheCall) {
 
   return false;
 }
+
+/// Handle __builtin_assume_aligned. This is declared
+/// as (const void*, size_t, ...) and can take one optional constant int arg.
+bool Sema::SemaBuiltinAssumeAligned(CallExpr *TheCall) {
+  unsigned NumArgs = TheCall->getNumArgs();
+
+  if (NumArgs > 3)
+    return Diag(TheCall->getLocEnd(),
+             diag::err_typecheck_call_too_many_args_at_most)
+             << 0 /*function call*/ << 3 << NumArgs
+             << TheCall->getSourceRange();
+
+  // Argument 0 is checked for us; the alignment must be a constant integer.
+  Expr *Arg = TheCall->getArg(1);
+
+  // We can't check the value of a dependent argument.
+  if (!Arg->isTypeDependent() && !Arg->isValueDependent()) {
+    llvm::APSInt Result;
+    if (SemaBuiltinConstantArg(TheCall, 1, Result))
+      return true;
+
+    if (Result.getLimitedValue() > llvm::Value::MaximumAlignment ||
+        !Result.isUnsigned())
+      return Diag(TheCall->getLocStart(), diag::err_argument_invalid_range)
+           << "0" << llvm::Value::MaximumAlignment << Arg->getSourceRange();
+    if (!Result.isPowerOf2())
+      return Diag(TheCall->getLocStart(),
+                  diag::err_attribute_aligned_not_power_of_two)
+           << Arg->getSourceRange();
+  }
+
+  if (NumArgs > 2) {
+    Arg = TheCall->getArg(2);
+    QualType T = Arg->getType();
+
+    // Note: gcc specifies the prototype as taking a size_t, but LLVM can
+    // handle only 32-bit alignment values.
+    if (!T->isIntegralType(Context))
+      return Diag(TheCall->getLocStart(),
+               diag::err_typecheck_converted_constant_expression)
+          << T << "an integral type" << Arg->getSourceRange();
+  }
+
+  return false;
+}
+
 
 /// SemaBuiltinConstantArg - Handle a check if argument ArgNum of CallExpr
 /// TheCall is a constant expression.

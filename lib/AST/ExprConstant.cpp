@@ -4321,6 +4321,7 @@ bool IntExprEvaluator::VisitCallExpr(const CallExpr *E) {
   }
 
   case Builtin::BI__builtin_expect:
+  case Builtin::BI__builtin_assume_aligned:
     return Visit(E->getArg(0));
 
   case Builtin::BIstrlen:

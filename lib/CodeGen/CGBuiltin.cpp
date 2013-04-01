@@ -384,6 +384,38 @@ RValue CodeGenFunction::EmitBuiltinExpr(const FunctionDecl *FD,
                                         "expval");
     return RValue::get(Result);
   }
+  case Builtin::BI__builtin_assume_aligned: {
+    Value *PtrValue = EmitScalarExpr(E->getArg(0));
+    Value *PtrIntValue =
+      Builder.CreatePtrToInt(PtrValue, IntPtrTy, "ptrint");
+
+    Value *AlignmentValue = EmitScalarExpr(E->getArg(1));
+    ConstantInt *AlignmentCI = cast<ConstantInt>(AlignmentValue);
+    unsigned Alignment = (unsigned) AlignmentCI->getZExtValue();
+
+    Value *Mask = llvm::ConstantInt::get(IntPtrTy,
+      Alignment > 0 ? Alignment - 1 : 0);
+    if (E->getNumArgs() > 2) {
+      Value *OffsetValue = EmitScalarExpr(E->getArg(2));
+      if (OffsetValue->getType() != IntPtrTy)
+        OffsetValue = Builder.CreateIntCast(OffsetValue, IntPtrTy,
+                        /*isSigned*/true, "offsetcast");
+      PtrIntValue = Builder.CreateSub(PtrIntValue, OffsetValue, "offsetptr");
+    }
+
+    Value *Zero = llvm::ConstantInt::get(IntPtrTy, 0);
+    Value *MaskedPtr = Builder.CreateAnd(PtrIntValue, Mask, "maskedptr");
+    Value *InvCond = Builder.CreateICmpEQ(MaskedPtr, Zero, "maskcond");
+
+    Value *FnInvariant = CGM.getIntrinsic(Intrinsic::invariant);
+    Builder.CreateCall(FnInvariant, InvCond);
+    return RValue::get(PtrValue);
+  }
+  case Builtin::BI__builtin_assume: {
+    Value *ArgValue = EmitScalarExpr(E->getArg(0));
+    Value *FnInvariant = CGM.getIntrinsic(Intrinsic::invariant);
+    return RValue::get(Builder.CreateCall(FnInvariant, ArgValue));
+  }
   case Builtin::BI__builtin_bswap16:
   case Builtin::BI__builtin_bswap32:
   case Builtin::BI__builtin_bswap64: {
